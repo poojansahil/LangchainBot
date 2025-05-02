@@ -1,15 +1,36 @@
 import streamlit as st
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain.memory import ConversationBufferMemory
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
 import os
 from datetime import datetime
 
+# Try import statements with specific error handling
+try:
+    # First try importing the core packages
+    import google.generativeai as genai
+    from openai import OpenAI
+    
+    # Now attempt to import the full set of required packages
+    try:
+        from langchain.memory import ConversationBufferMemory
+        from langchain.chains import LLMChain
+        from langchain.prompts import PromptTemplate
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        st.error("Unable to import LangChain modules. Please check your installation.")
+        st.stop()
+        
+except ImportError as e:
+    st.error(f"Import error: {str(e)}")
+    st.info("Make sure all dependencies are installed: `pip install langchain langchain_google_genai langchain_openai google-generativeai openai`")
+    st.stop()
+
 # Set page configuration
-st.set_page_config(page_title="Langchain Chatbot", page_icon="💬")
+st.set_page_config(
+    page_title="Chatbot with Gemini & OpenAI", 
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Initialize session state variables
 if "messages" not in st.session_state:
@@ -24,25 +45,46 @@ if "chat_memory" not in st.session_state:
     st.session_state.chat_memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
 # App title and description
-st.title("🤖 Langchain Chatbot")
+st.title("🤖 Chatbot with Gemini & OpenAI")
 st.subheader("Chat with Gemini, Summarize with OpenAI")
+
+# Display instructions for first-time users
+if not st.session_state.messages:
+    st.info("""
+    ### How to use this chatbot:
+    1. Enter your **Gemini API key** in the sidebar to start chatting
+    2. When you're ready to end the conversation, enter your **OpenAI API key** in the sidebar
+    3. Click **End Chat and Summarize** to get a summary and sentiment analysis
+    4. Download your conversation if desired
+    """)
 
 # API key input area in sidebar
 with st.sidebar:
     st.header("API Keys")
+    st.markdown("Enter your API keys below. These are stored only for the current session and are not saved permanently.")
     
     # Gemini API key input
     gemini_key = st.text_input("Enter Gemini API Key", type="password", key="gemini_key_input")
     if gemini_key:
         st.session_state.gemini_api_key = gemini_key
     
+    # Display API key instructions
+    if not st.session_state.gemini_api_key:
+        st.info("Please enter your Gemini API key above to start chatting.")
+    
     # OpenAI API key input
     openai_key = st.text_input("Enter OpenAI API Key (for summary)", type="password", key="openai_key_input")
     if openai_key:
         st.session_state.openai_api_key = openai_key
     
+    # Instructions for OpenAI API key
+    if not st.session_state.openai_api_key:
+        st.info("You'll need to enter an OpenAI API key to generate a summary when ending the chat.")
+
     # Add End Chat button in sidebar
-    if st.button("End Chat and Summarize", type="primary", disabled=not st.session_state.openai_api_key):
+    end_button_disabled = not st.session_state.openai_api_key or len(st.session_state.messages) <= 1
+    
+    if st.button("End Chat and Summarize", type="primary", disabled=end_button_disabled):
         if len(st.session_state.messages) > 1:  # Check if there's a conversation to summarize
             with st.spinner("Generating summary..."):
                 # Prepare conversation for summary
@@ -77,16 +119,14 @@ with st.sidebar:
                         api_key=st.session_state.openai_api_key
                     )
                     
-                    # Create summarization chain using newer langchain interface
-                    summary_chain = (
-                        {"conversation": lambda x: x}
-                        | summary_prompt
-                        | openai_llm
-                        | StrOutputParser()
+                    # Create summarization chain
+                    summary_chain = LLMChain(
+                        llm=openai_llm,
+                        prompt=summary_prompt
                     )
                     
                     # Generate summary
-                    summary_result = summary_chain.invoke(formatted_conversation)
+                    summary_result = summary_chain.run(conversation=formatted_conversation)
                     
                     # Display summary in main area
                     st.session_state.messages.append({"role": "assistant", "content": f"**Conversation Summary:**\n\n{summary_result}"})
@@ -124,7 +164,7 @@ for message in st.session_state.messages:
 if prompt := st.chat_input("Type your message here..."):
     # Check if Gemini API key is provided
     if not st.session_state.gemini_api_key:
-        st.warning("Please enter your Gemini API key in the sidebar.")
+        st.error("⚠️ Please enter your Gemini API key in the sidebar to start chatting.")
         st.stop()
     
     # Add user message to chat history
@@ -164,23 +204,16 @@ if prompt := st.chat_input("Type your message here..."):
                     template=chat_template
                 )
                 
-                # Create conversation chain using the newer langchain interface
-                conversation_chain = (
-                    {"chat_history": lambda x: st.session_state.chat_memory.load_memory_variables({})["chat_history"],
-                     "user_input": lambda x: x}
-                    | chat_prompt
-                    | llm
-                    | StrOutputParser()
+                # Create conversation chain
+                conversation_chain = LLMChain(
+                    llm=llm,
+                    prompt=chat_prompt,
+                    memory=st.session_state.chat_memory,
+                    verbose=True
                 )
                 
                 # Get response
-                response = conversation_chain.invoke(prompt)
-                
-                # Update memory
-                st.session_state.chat_memory.save_context(
-                    {"input": prompt},
-                    {"output": response}
-                )
+                response = conversation_chain.predict(user_input=prompt)
                 
                 # Display and save response
                 st.write(response)
