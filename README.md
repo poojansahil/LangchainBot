@@ -1,0 +1,2 @@
+# LangchainBot
+Langchain bot simple
