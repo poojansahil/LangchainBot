@@ -1,9 +1,10 @@
 import streamlit as st
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain.memory import ConversationBufferMemory
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
 import os
 from datetime import datetime
 
@@ -76,14 +77,16 @@ with st.sidebar:
                         api_key=st.session_state.openai_api_key
                     )
                     
-                    # Create summarization chain
-                    summary_chain = LLMChain(
-                        llm=openai_llm,
-                        prompt=summary_prompt
+                    # Create summarization chain using newer langchain interface
+                    summary_chain = (
+                        {"conversation": lambda x: x}
+                        | summary_prompt
+                        | openai_llm
+                        | StrOutputParser()
                     )
                     
                     # Generate summary
-                    summary_result = summary_chain.run(conversation=formatted_conversation)
+                    summary_result = summary_chain.invoke(formatted_conversation)
                     
                     # Display summary in main area
                     st.session_state.messages.append({"role": "assistant", "content": f"**Conversation Summary:**\n\n{summary_result}"})
@@ -161,16 +164,23 @@ if prompt := st.chat_input("Type your message here..."):
                     template=chat_template
                 )
                 
-                # Create conversation chain
-                conversation_chain = LLMChain(
-                    llm=llm,
-                    prompt=chat_prompt,
-                    memory=st.session_state.chat_memory,
-                    verbose=True
+                # Create conversation chain using the newer langchain interface
+                conversation_chain = (
+                    {"chat_history": lambda x: st.session_state.chat_memory.load_memory_variables({})["chat_history"],
+                     "user_input": lambda x: x}
+                    | chat_prompt
+                    | llm
+                    | StrOutputParser()
                 )
                 
                 # Get response
-                response = conversation_chain.predict(user_input=prompt)
+                response = conversation_chain.invoke(prompt)
+                
+                # Update memory
+                st.session_state.chat_memory.save_context(
+                    {"input": prompt},
+                    {"output": response}
+                )
                 
                 # Display and save response
                 st.write(response)
